@@ -2,18 +2,25 @@ export type TransactionStatus =
   | "completed"
   | "pending"
   | "failed"
-  | "reversed";
+  | "reversed"
+  | "held";
 
 export type TransactionChannel =
   | "upi"
   | "imps"
   | "neft"
   | "rtgs"
+  | "wire"
   | "card"
-  | "internal_transfer";
+  | "cash"
+  | "internal"
+  | "internal_transfer"
+  | "other";
 
 export type EventOrigin =
   | "bank_feed"
+  | "manual_upload"
+  | "api_push"
   | "payment_gateway"
   | "core_banking"
   | "partner_network"

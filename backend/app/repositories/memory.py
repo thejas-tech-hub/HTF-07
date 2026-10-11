@@ -34,6 +34,9 @@ class InMemoryCaseRepository(CaseRepository):
     async def list_all(self) -> list[FraudCase]:
         return list(self._cases.values())
 
+    async def delete(self, case_id: str) -> bool:
+        return self._cases.pop(case_id, None) is not None
+
 
 class InMemoryEventRepository(EventRepository):
     """Dict-backed event store with case-association index."""
@@ -78,3 +81,9 @@ class InMemoryEventRepository(EventRepository):
 
     async def event_exists(self, event_id: str) -> bool:
         return event_id in self._events
+
+    async def delete_by_case_id(self, case_id: str) -> int:
+        eids = self._case_index.pop(case_id, [])
+        for eid in eids:
+            self._events.pop(eid, None)
+        return len(eids)

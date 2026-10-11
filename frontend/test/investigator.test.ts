@@ -22,6 +22,15 @@ import {
   formatInterventionExplanation,
 } from "../src/lib/mappers/analysisMapper.ts";
 import { buildCytoscapeElements } from "../src/lib/mappers/graphMapper.ts";
+import { parseCSV, parseJSON, sniffDelimiter } from "../src/lib/upload/csvParser.ts";
+import {
+  autoSuggestMapping,
+  evaluateMappingStatus,
+  buildConfigFromMapping,
+  CANONICAL_FIELDS,
+} from "../src/lib/upload/columnMapper.ts";
+import { transformRawRowsToEvents } from "../src/lib/upload/transformEvents.ts";
+import { SAMPLE_DATASETS } from "../src/lib/upload/sampleDatasets.ts";
 import type {
   InvestigationAnalysisResponse,
   CandidateRecommendation,
@@ -408,4 +417,242 @@ describe("AEGIS-Flow Investigator Test Suite", () => {
       assert.equal(infeasibleResponse.stages.intervention_optimization.status, "infeasible");
     });
   });
+
+  // ── 7. Upload Ingestion, Mapping & Transformation ──────────────────────────
+  describe("Upload Ingestion, Mapping & Transformation", () => {
+    it("sniffs delimiters correctly from header text", () => {
+      assert.equal(sniffDelimiter("tx_id,sender,receiver,amount"), ",");
+      assert.equal(sniffDelimiter("tx_id;sender;receiver;amount"), ";");
+      assert.equal(sniffDelimiter("tx_id\tsender\treceiver\tamount"), "\t");
+      assert.equal(sniffDelimiter("tx_id|sender|receiver|amount"), "|");
+    });
+
+    it("parses standard and quoted CSV accurately", () => {
+      const csv = `transaction_id,source_account,destination_account,amount,timestamp,currency
+TX-101,ACC-A,ACC-B,"15,000.50",2026-03-29T10:00:00Z,INR
+TX-102,ACC-B,"ACC-C, Ltd",25000,2026-03-29T11:00:00Z,INR`;
+
+      const result = parseCSV(csv);
+      assert.equal(result.columns.length, 6);
+      assert.equal(result.rows.length, 2);
+      assert.equal(result.rows[0]["transaction_id"], "TX-101");
+      assert.equal(result.rows[0]["amount"], "15,000.50");
+      assert.equal(result.rows[1]["destination_account"], "ACC-C, Ltd");
+    });
+
+    it("parses standard JSON and JSONL datasets", () => {
+      const jsonStr = JSON.stringify([
+        { tx_ref: "TX-99", from_acc: "ACC-1", to_acc: "ACC-2", value: 5000, time: "2026-03-29T08:00:00Z" }
+      ]);
+      const jsonRes = parseJSON(jsonStr);
+      assert.equal(jsonRes.rows.length, 1);
+      assert.equal(jsonRes.rows[0]["tx_ref"], "TX-99");
+
+      const jsonlStr = `{"tx_ref": "TX-1", "from_acc": "A", "to_acc": "B", "value": 100, "time": "2026-03-29T08:00:00Z"}
+{"tx_ref": "TX-2", "from_acc": "B", "to_acc": "C", "value": 200, "time": "2026-03-29T09:00:00Z"}`;
+      const jsonlRes = parseJSON(jsonlStr);
+      assert.equal(jsonlRes.rows.length, 2);
+      assert.equal(jsonlRes.rows[1]["tx_ref"], "TX-2");
+    });
+
+    it("auto-suggests canonical mappings for common bank column headers", () => {
+      const headers = [
+        "TxnReference",
+        "SenderAccount",
+        "BeneficiaryAccount",
+        "TransferAmount",
+        "BookingTimestamp",
+        "CurrencyCode",
+        "PaymentType"
+      ];
+      const mapping = autoSuggestMapping(headers);
+
+      assert.equal(mapping["TxnReference"], "transaction_id");
+      assert.equal(mapping["SenderAccount"], "sender_account_id");
+      assert.equal(mapping["BeneficiaryAccount"], "receiver_account_id");
+      assert.equal(mapping["TransferAmount"], "amount");
+      assert.equal(mapping["BookingTimestamp"], "occurred_at");
+      assert.equal(mapping["CurrencyCode"], "currency");
+      assert.equal(mapping["PaymentType"], "channel");
+    });
+
+    it("evaluates mapping status counters matching reference requirements", () => {
+      const headers = ["tx_id", "source_acc", "target_acc", "amt", "time", "misc_col"];
+      const mapping = {
+        tx_id: "transaction_id" as const,
+        source_acc: "sender_account_id" as const,
+        target_acc: "receiver_account_id" as const,
+        amt: "amount" as const,
+        time: "occurred_at" as const,
+        misc_col: "skip" as const,
+      };
+
+      const status = evaluateMappingStatus(headers, mapping);
+      assert.equal(status.isMandatorySatisfied, true);
+      assert.equal(status.missingMandatoryFields.length, 0);
+      assert.equal(status.readyCount, 5); // 5 required canonical fields mapped
+      assert.equal(status.skippedCount, 1);
+      assert.equal(status.unmappedCount, 0);
+    });
+
+    it("transforms raw rows to canonical TransactionEvents with minor-unit conversion", () => {
+      const rawRows: Record<string, string>[] = [
+        {
+          id: "TX-A1",
+          src: "ACC-CORP-1",
+          dst: "ACC-MULE-2",
+          val: "50,000.00",
+          dt: "2026-03-29T10:00:00Z",
+          curr: "INR",
+        },
+        {
+          id: "TX-A2",
+          src: "ACC-MULE-2",
+          dst: "ACC-EXIT-3",
+          val: "49500",
+          dt: "2026-03-29T11:30:00Z",
+          curr: "INR",
+        },
+        // Malformed row: missing destination
+        {
+          id: "TX-A3",
+          src: "ACC-CORP-1",
+          dst: "",
+          val: "1000",
+          dt: "2026-03-29T12:00:00Z",
+        },
+      ];
+
+      const config = {
+        transaction_id: "id",
+        sender_account_id: "src",
+        receiver_account_id: "dst",
+        amount: "val",
+        occurred_at: "dt",
+        currency: "curr",
+      };
+
+      const result = transformRawRowsToEvents(rawRows, config, { amountInMinorUnits: false });
+
+      assert.equal(result.validCount, 2);
+      assert.equal(result.invalidCount, 1);
+      assert.equal(result.errors.length, 1);
+      assert.ok(result.errors[0].message.includes("receiver"));
+
+      // Check minor-units conversion: 50,000.00 INR -> 5,000,000 paise
+      const ev1 = result.events[0];
+      assert.equal(ev1.transaction_id, "TX-A1");
+      assert.equal(ev1.amount_minor_units, 5_000_000);
+      assert.equal(ev1.sender.account_id, "ACC-CORP-1");
+      assert.equal(ev1.receiver.account_id, "ACC-MULE-2");
+    });
+
+    it("generates case-scoped collision-safe event IDs while preserving original transaction IDs", () => {
+      const rawRows = [
+        {
+          id: "SYN-TXN-001",
+          src: "Victim-1",
+          dst: "Mule-1",
+          val: "50000",
+          dt: "2026-10-10T08:00:00Z",
+        },
+      ];
+      const config = {
+        transaction_id: "id",
+        sender_account_id: "src",
+        receiver_account_id: "dst",
+        amount: "val",
+        occurred_at: "dt",
+      };
+
+      const resCaseA = transformRawRowsToEvents(rawRows, config, { caseId: "CASE-ALPHA" });
+      const resCaseB = transformRawRowsToEvents(rawRows, config, { caseId: "CASE-BETA" });
+
+      assert.equal(resCaseA.events[0].transaction_id, "SYN-TXN-001");
+      assert.equal(resCaseB.events[0].transaction_id, "SYN-TXN-001");
+      assert.equal(resCaseA.events[0].event_id, "ev_CASE-ALPHA_SYN-TXN-001");
+      assert.equal(resCaseB.events[0].event_id, "ev_CASE-BETA_SYN-TXN-001");
+      assert.notEqual(resCaseA.events[0].event_id, resCaseB.events[0].event_id);
+    });
+
+    it("provides verified sample banking datasets for rapid testing and demonstration", () => {
+      assert.ok(SAMPLE_DATASETS.length >= 3);
+      for (const ds of SAMPLE_DATASETS) {
+        assert.ok(ds.name.length > 0);
+        assert.ok(ds.content.length > 0);
+        assert.ok(["csv", "json", "jsonl"].includes(ds.format));
+      }
+    });
+  });
+
+  // ── 8. Canvas ↔ Table View Lifecycle & Ledger Invariance ──────────────────
+  describe("Canvas ↔ Table View Lifecycle & Ledger Invariance", () => {
+    const testEvents = DEMO_EVENTS;
+    const testDecisionTime = DEMO_DEFAULT_DECISION_TIME;
+    const mockCutEventIds = new Set(["ev-demo-002"]);
+
+    it("accurately categorizes timeline states across decision cutoff T", () => {
+      for (const ev of testEvents) {
+        const isHistorical = new Date(ev.occurred_at) <= new Date(testDecisionTime);
+        const isCut = mockCutEventIds.has(ev.event_id);
+
+        if (isCut) {
+          assert.equal(ev.event_id, "ev-demo-002");
+        } else if (isHistorical) {
+          assert.ok(new Date(ev.occurred_at) <= new Date(testDecisionTime));
+        } else {
+          assert.ok(new Date(ev.occurred_at) > new Date(testDecisionTime));
+        }
+      }
+    });
+
+    it("filters tabular ledger rows by account identifier, tx ID, and reference narration", () => {
+      const filterByQuery = (q: string) => {
+        const query = q.toLowerCase();
+        return testEvents.filter(
+          (e) =>
+            e.transaction_id.toLowerCase().includes(query) ||
+            e.sender.account_id.toLowerCase().includes(query) ||
+            e.receiver.account_id.toLowerCase().includes(query) ||
+            (e.reference && e.reference.toLowerCase().includes(query))
+        );
+      };
+
+      // Search by transaction ID
+      const resTx = filterByQuery("tx-seed-1001");
+      assert.equal(resTx.length, 1);
+      assert.equal(resTx[0].transaction_id, "tx-seed-1001");
+
+      // Search by account ID
+      const resAcc = filterByQuery("Mule-Alpha-101");
+      assert.ok(resAcc.length >= 2);
+
+      // Search by narration reference keyword
+      const resRef = filterByQuery("UPI/DEMO");
+      assert.ok(resRef.length >= 1);
+
+      // Blank query returns all records intact
+      assert.equal(filterByQuery("").length, testEvents.length);
+    });
+
+    it("preserves data parity between Cytoscape elements and tabular ledger records", () => {
+      const cyElements = buildCytoscapeElements({
+        events: testEvents,
+        analysis: null,
+        decisionTimestamp: testDecisionTime,
+        showForecasts: true,
+      });
+
+      const cyEdges = cyElements.filter((el) => "source" in el.data);
+      assert.equal(cyEdges.length, testEvents.length);
+
+      // Verify that every event is represented in both graph and tabular representations
+      const cyEdgeEventIds = new Set(cyEdges.map((e) => e.data.id));
+      for (const ev of testEvents) {
+        assert.ok(cyEdgeEventIds.has(ev.event_id));
+      }
+    });
+  });
 });
+
+

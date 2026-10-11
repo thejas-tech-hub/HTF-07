@@ -58,6 +58,31 @@ export function EvidenceWarningsPanel({
               size="sm"
             />
           )}
+          <button
+            type="button"
+            onClick={() => {
+              const exportPayload = {
+                exported_at: new Date().toISOString(),
+                overall_status: overallStatus,
+                analysis_timestamp: analysisTimestamp,
+                stages,
+                warnings_and_limitations: warnings,
+              };
+              const blob = new Blob([JSON.stringify(exportPayload, null, 2)], {
+                type: "application/json",
+              });
+              const url = URL.createObjectURL(blob);
+              const a = document.createElement("a");
+              a.href = url;
+              a.download = `AEGIS_Case_Audit_${Date.now()}.json`;
+              a.click();
+              URL.revokeObjectURL(url);
+            }}
+            className="px-3 py-1 rounded-lg bg-surface-card hover:bg-surface-elevated text-xs text-brand-periwinkle border border-surface-border transition-colors cursor-pointer flex items-center gap-1.5"
+            title="Download structured investigation audit dossier"
+          >
+            <span>Export Dossier (JSON)</span>
+          </button>
         </div>
       </div>
 

@@ -33,6 +33,10 @@ class CaseRepository(ABC):
     async def list_all(self) -> list[FraudCase]:
         """Return all stored cases (MVP only — no pagination)."""
 
+    @abstractmethod
+    async def delete(self, case_id: str) -> bool:
+        """Delete a case by ID. Returns True if removed, False if not found."""
+
 
 class EventRepository(ABC):
     """Abstract persistence interface for TransactionEvent objects."""
@@ -64,3 +68,7 @@ class EventRepository(ABC):
     @abstractmethod
     async def event_exists(self, event_id: str) -> bool:
         """Return True if an event with this ID exists."""
+
+    @abstractmethod
+    async def delete_by_case_id(self, case_id: str) -> int:
+        """Delete all events associated with a case. Returns count of deleted events."""
