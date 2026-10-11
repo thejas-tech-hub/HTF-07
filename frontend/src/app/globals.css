@@ -1,23 +1,28 @@
 @import "tailwindcss";
 
 :root {
-  --background: #0c0c16;
+  /* Obsidian & High-Contrast Fintech Surfaces */
+  --background: #080c14;
   --foreground: #f1f5f9;
-  --surface: #121222;
-  --surface-elevated: #17172b;
-  --surface-subtle: #0e0e1a;
-  --surface-border: #23233c;
-  --surface-border-subtle: #1a1a2e;
+  --surface: #0e1524;
+  --surface-elevated: #131c30;
+  --surface-card: #17233c;
+  --surface-border: #1e2d4a;
+  --surface-border-subtle: #152035;
 
-  /* Fintech Visual Identity Palette */
-  --slate-blue: #6666ff;
-  --periwinkle: #b0baff;
-  --columbia-blue: #c9e8ff;
-  --celadon: #b9f0d7;
+  /* Sovereign Financial Intelligence Accents */
+  --brand-primary: #3b82f6;
+  --brand-indigo: #6366f1;
+  --brand-periwinkle: #93c5fd;
+  --brand-cyan: #38bdf8;
+  --brand-celadon: #34d399;
 
-  /* Semantic Alert Accents */
-  --risk-red: #e05263;
-  --caution-amber: #e5a84b;
+  /* Forensic Risk Spectrum */
+  --risk-danger: #ef4444;
+  --risk-danger-glow: rgba(239, 68, 68, 0.18);
+  --risk-caution: #f59e0b;
+  --risk-caution-glow: rgba(245, 158, 11, 0.15);
+  --risk-success: #10b981;
 }
 
 @theme inline {
@@ -25,18 +30,21 @@
   --color-foreground: var(--foreground);
   --color-surface: var(--surface);
   --color-surface-elevated: var(--surface-elevated);
-  --color-surface-subtle: var(--surface-subtle);
+  --color-surface-card: var(--surface-card);
   --color-surface-border: var(--surface-border);
+  --color-surface-border-subtle: var(--surface-border-subtle);
 
-  --color-slate-blue: var(--slate-blue);
-  --color-periwinkle: var(--periwinkle);
-  --color-columbia-blue: var(--columbia-blue);
-  --color-celadon: var(--celadon);
+  --color-brand-primary: var(--brand-primary);
+  --color-brand-indigo: var(--brand-indigo);
+  --color-brand-periwinkle: var(--brand-periwinkle);
+  --color-brand-cyan: var(--brand-cyan);
+  --color-brand-celadon: var(--brand-celadon);
 
-  --color-risk-red: var(--risk-red);
-  --color-caution-amber: var(--caution-amber);
+  --color-risk-danger: var(--risk-danger);
+  --color-risk-caution: var(--risk-caution);
+  --color-risk-success: var(--risk-success);
 
-  --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
   --font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
 }
 
@@ -48,29 +56,46 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 
-/* Custom scrollbars */
+/* Custom Scrollbars */
 ::-webkit-scrollbar {
-  width: 6px;
-  height: 6px;
+  width: 5px;
+  height: 5px;
 }
 
 ::-webkit-scrollbar-track {
-  background: #0c0c16;
+  background: #080c14;
 }
 
 ::-webkit-scrollbar-thumb {
-  background: #23233c;
+  background: #1e2d4a;
   border-radius: 3px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: #36365a;
+  background: #2b3d63;
 }
 
-/* Graph Canvas Matrix Grid */
+/* Subtle Graph Canvas Matrix Grid */
 .bg-graph-grid {
-  background-color: #0c0c16;
-  background-image: radial-gradient(rgba(176, 186, 255, 0.07) 1px, transparent 1px);
-  background-size: 22px 22px;
+  background-color: #080c14;
+  background-image: radial-gradient(rgba(59, 130, 246, 0.08) 1px, transparent 1px);
+  background-size: 20px 20px;
 }
 
+/* Doppelrand / Double-Bezel Hardware Enclosure */
+.bezel-outer {
+  background: rgba(255, 255, 255, 0.025);
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  box-shadow: 0 20px 40px -15px rgba(0, 0, 0, 0.6), inset 0 1px 0 rgba(255, 255, 255, 0.06);
+}
+
+.bezel-inner {
+  background: #0e1524;
+  border: 1px solid #1e2d4a;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05);
+}
+
+/* Interactive transitions */
+.transition-haptic {
+  transition: all 200ms cubic-bezier(0.16, 1, 0.3, 1);
+}

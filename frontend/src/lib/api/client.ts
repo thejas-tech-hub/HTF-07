@@ -162,6 +162,37 @@ export class ApiClient {
       }
     );
   }
+
+  async validateDataset(
+    req: {
+      raw_content: string;
+      format: string;
+      column_mapping?: Record<string, string>;
+      default_currency?: string;
+      amount_in_minor_units?: boolean;
+      default_timezone_offset_minutes?: number;
+    }
+  ): Promise<import("../../types/upload.ts").ValidationSummary> {
+    return this.request<import("../../types/upload.ts").ValidationSummary>(
+      "/api/upload/validate",
+      {
+        method: "POST",
+        body: JSON.stringify(req),
+      }
+    );
+  }
+
+  async ingestUploadedDataset(
+    payload: import("../../types/upload.ts").IngestUploadedDatasetRequest
+  ): Promise<import("../../types/upload.ts").IngestUploadedDatasetResponse> {
+    return this.request<import("../../types/upload.ts").IngestUploadedDatasetResponse>(
+      "/api/upload/ingest",
+      {
+        method: "POST",
+        body: JSON.stringify(payload),
+      }
+    );
+  }
 }
 
 export const apiClient = new ApiClient();

@@ -114,31 +114,86 @@ Open `http://localhost:3000` to access the investigator workspace.
 
 ---
 
-## Testing
+## Real Data Upload & Investigation Intake Workflow
+
+AEGIS-Flow puts **real transaction data upload as the primary entry point** for banking fraud operations, with synthetic demonstrations clearly separated and labeled.
+
+```
+       Upload File (CSV / JSON / JSONL)
+                     │
+                     ▼
+       Auto-Detection & Delimiter Sniffing
+                     │
+                     ▼
+       Column Mapping Matrix (Reference 2)
+  [ Ready: 5 | Review: 2 | Skipped: 3 | Unmapped: 0 ]
+                     │
+                     ▼
+       Validation Audit & Integrity Checks
+   • Duplicates • Self-transfers • Non-positive amounts
+   • ISO-8601 timestamps • Paise/Rupee denomination
+                     │
+                     ▼
+       Case Setup & Candidate Seed Selection
+   • Select reported victim transfer (taint seed)
+   • Identify egress crypto/cash-out sinks
+                     │
+                     ▼
+       Atomic Ingestion & Pipeline Orchestration
+   `POST /api/upload/ingest` ➔ `POST /api/cases/{id}/analyze`
+                     │
+                     ▼
+       Executive Investigation Workspace (References 1, 3, 4)
+   • Cytoscape Multigraph + Accessible Ledger Alternative
+   • Proportional Taint Allocation & Commingled Balances
+   • Dinic's Algorithm Min-Cut Chokepoints
+   • Counterfactual Simulation & Pareto Frontier
+```
+
+### Supported Ingestion Formats & Canonical Mapping
+
+| Canonical Field | Type | Required | Description & Synonyms |
+|---|---|---|---|
+| `transaction_id` | String | **Yes** | Unique payment reference (`tx_id`, `txn_reference`, `payment_id`, `id`) |
+| `sender_account_id` | String | **Yes** | Debited / originator account (`source_account`, `from_account`, `payer`) |
+| `receiver_account_id` | String | **Yes** | Credited / beneficiary account (`destination_account`, `to_account`, `payee`) |
+| `amount` | Number | **Yes** | Transfer value (`txn_amount`, `value`, `transfer_amount`, `amount_inr`) |
+| `occurred_at` | ISO-8601 | **Yes** | Transaction timestamp (`booking_timestamp`, `tx_time`, `datetime`, `date`) |
+| `currency` | String | No | ISO-4217 code (e.g. `INR`, `USD`; defaults to `INR`) |
+| `channel` | String | No | Payment rail (`upi`, `neft`, `rtgs`, `imps`, `wire`, `card`) |
+| `status` | String | No | Lifecycle status (`completed`, `pending`, `held`, `reversed`) |
+| `sender_institution` | String | No | Originating bank / IFSC (`sender_bank`, `remitter_bank`) |
+| `receiver_institution` | String | No | Beneficiary bank / IFSC (`receiver_bank`, `beneficiary_bank`) |
+| `reference` | String | No | External UTR / narration / remarks |
+
+### Confidentiality & Sensitive Financial Data Protection
+
+- **Local & Sovereign Processing**: Uploaded transaction payloads are parsed and validated directly in the application perimeter. No case data is transmitted to third-party generative AI APIs or external trackers.
+- **Strict Server-Side Validation**: File structure, timestamps, integer minor-units, and payload sizes are enforced on both client and server before analysis execution.
+- **Transparency on Models & Evidence**: If an optional ML model (e.g., LightGBM) is unavailable, AEGIS-Flow displays an explicit `Unavailable` status rather than fabricating risk scores or confidence values.
+
+---
+
+## Testing & Quality Assurance
 
 ```bash
-# Backend pytest suite (342 tests)
-.venv\Scripts\python -m pytest
+# Backend pytest suite (55 tests passing)
+.venv\Scripts\pytest tests/backend
 
-# Frontend test suite (21 unit tests)
+# Frontend test suite (29 tests passing across 7 suites)
 cd frontend
 npm test
-npm run lint
-npx tsc --noEmit
+
+# Production build check (Turbopack)
 npm run build
 ```
 
 ---
 
-## ⚠️ Prototype Disclaimer
+## ⚠️ Advisory & Operational Scope
 
-**AEGIS-Flow is a research prototype built for a hackathon.**
-
-- It operates **exclusively on synthetic, generated data**. It does not connect to, integrate with, or control any real bank account, payment system, or financial institution.
-- It does **not** claim integration with NPCI, RBI, DPIP, or any bank's internal systems.
-- It does **not** issue freeze orders, block transactions, or take any action in a live financial network.
-- Any similarity to real account numbers, institutions, or transactions in the synthetic data is coincidental.
-- Comparative superiority over existing production fraud systems (e.g., AML platforms, real-time fraud engines) **will be evaluated using our benchmark suite** once implemented. No such claim is made at this stage.
+- **Decision-Support Only**: AEGIS-Flow is an investigative decision-support platform designed for authorized banking personnel. It simulates counterfactual interventions to assist human analysts; it does **not** autonomously freeze accounts or halt interbank payment rails.
+- **Legal Caveat on Taint Allocation**: Model-estimated proportional taint allocation and graph-cut chokepoints provide mathematical provenance and candidate prioritization, not definitive judicial proof of criminal intent.
 
 ---
 

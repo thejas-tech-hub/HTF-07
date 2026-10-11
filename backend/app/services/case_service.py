@@ -41,6 +41,12 @@ class CaseService:
     async def list_cases(self) -> list[FraudCase]:
         return await self._cases.list_all()
 
+    async def delete_case(self, case_id: str) -> bool:
+        """Delete a case and remove its graph. Returns True if deleted."""
+        deleted = await self._cases.delete(case_id)
+        self._graphs.remove(case_id)
+        return deleted
+
     async def get_timeline(self, case_id: str) -> list[TransactionEvent]:
         """
         Return events for a case ordered by occurred_at (ascending).
@@ -127,3 +133,9 @@ class EventService:
         await self._events.save_batch(events, case_id)
         self._graphs.add_events(case_id, events)
         return events
+
+    async def delete_events_for_case(self, case_id: str) -> int:
+        """Delete all events associated with a case."""
+        deleted_count = await self._events.delete_by_case_id(case_id)
+        self._graphs.remove(case_id)
+        return deleted_count

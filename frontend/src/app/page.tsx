@@ -11,6 +11,7 @@ import {
   Target,
   ArrowRight,
   Search,
+  UploadCloud,
 } from "lucide-react";
 import {
   FraudCase,
@@ -34,18 +35,22 @@ import { ChokepointPanel } from "@/components/chokepoint/ChokepointPanel";
 import { RecommendationCard } from "@/components/interventions/RecommendationCard";
 import { InterventionComparison } from "@/components/interventions/InterventionComparison";
 import { EvidenceWarningsPanel } from "@/components/evidence/EvidenceWarningsPanel";
-import { NewCaseModal } from "@/components/investigation/NewCaseModal";
+import { CaseIntakeWorkflow } from "@/components/upload/CaseIntakeWorkflow";
 
 type ActiveTab = "overview" | "comparison" | "provenance" | "intelligence" | "evidence";
 
 export default function InvestigatorDashboard() {
-  // State
+  // Case & Ledger State
   const [cases, setCases] = useState<FraudCase[]>([]);
   const [activeCaseId, setActiveCaseId] = useState<string>("");
   const [currentCase, setCurrentCase] = useState<FraudCase | null>(null);
   const [events, setEvents] = useState<TransactionEvent[]>([]);
   const [decisionTimestamp, setDecisionTimestamp] = useState<string>(DEMO_DEFAULT_DECISION_TIME);
   const [analysis, setAnalysis] = useState<InvestigationAnalysisResponse | null>(null);
+
+  // Analysis Seed & Sink Anchors (User or Auto configured)
+  const [activeSeedTxId, setActiveSeedTxId] = useState<string>("");
+  const [activeSinkAccounts, setActiveSinkAccounts] = useState<string[]>([]);
 
   // Status & Loaders
   const [isBackendHealthy, setIsBackendHealthy] = useState<boolean>(true);
@@ -55,7 +60,9 @@ export default function InvestigatorDashboard() {
   const [isLoadingDemo, setIsLoadingDemo] = useState<boolean>(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<ActiveTab>("overview");
-  const [isNewCaseModalOpen, setIsNewCaseModalOpen] = useState<boolean>(false);
+
+  // Upload Intake Wizard Modal State
+  const [isUploadWizardOpen, setIsUploadWizardOpen] = useState<boolean>(false);
 
   // ── 1. Initial Health Check & Case Loading ─────────────────────────────────
   const fetchCases = useCallback(async () => {
@@ -134,7 +141,13 @@ export default function InvestigatorDashboard() {
 
         if (timeline.length > 0) {
           const midpointIdx = Math.min(2, timeline.length - 1);
-          setDecisionTimestamp(timeline[midpointIdx].occurred_at);
+          setDecisionTimestamp((prev) => prev || timeline[midpointIdx].occurred_at);
+          setActiveSeedTxId((prev) => prev || timeline[0].transaction_id);
+
+          const senders = new Set(timeline.map((e) => e.sender.account_id));
+          const receivers = new Set(timeline.map((e) => e.receiver.account_id));
+          const terminalSinks = Array.from(receivers).filter((r) => !senders.has(r));
+          setActiveSinkAccounts(terminalSinks.slice(0, 3));
         }
       } catch (err) {
         if (!active) return;
@@ -158,8 +171,9 @@ export default function InvestigatorDashboard() {
     setIsAnalyzing(true);
     setErrorMessage(null);
 
-    const seedEvent = events[0];
-    const sinkCandidate = events[events.length - 1]?.receiver.account_id;
+    // Identify seed event: matched by activeSeedTxId or default to first event
+    const seedEvent = events.find((e) => e.transaction_id === activeSeedTxId) || events[0];
+    const sinks = activeSinkAccounts.length > 0 ? activeSinkAccounts : undefined;
 
     const requestPayload: InvestigationAnalysisRequest = {
       simulation_timestamp: decisionTimestamp,
@@ -170,7 +184,7 @@ export default function InvestigatorDashboard() {
         },
       ],
       source_account_ids: [seedEvent.receiver.account_id],
-      sink_account_ids: sinkCandidate ? [sinkCandidate] : undefined,
+      sink_account_ids: sinks,
       forecast_config: {
         top_k: 3,
         max_depth: 3,
@@ -194,9 +208,9 @@ export default function InvestigatorDashboard() {
     } finally {
       setIsAnalyzing(false);
     }
-  }, [activeCaseId, events, decisionTimestamp]);
+  }, [activeCaseId, events, decisionTimestamp, activeSeedTxId, activeSinkAccounts]);
 
-  // ── 4. Load Demo Case Workflow ─────────────────────────────────────────────
+  // ── 4. Load Synthetic Demo Workflow (Clearly Labeled Demo) ─────────────────
   const handleLoadDemo = async () => {
     setIsLoadingDemo(true);
     setErrorMessage(null);
@@ -209,6 +223,8 @@ export default function InvestigatorDashboard() {
       const timeline = await apiClient.getTimeline(demoCase.case_id);
       setEvents(timeline);
       setDecisionTimestamp(DEMO_DEFAULT_DECISION_TIME);
+      setActiveSeedTxId("tx-seed-1001");
+      setActiveSinkAccounts(["Exit-CryptoDesk-909"]);
 
       const demoReq = getDemoAnalysisRequest(DEMO_DEFAULT_DECISION_TIME);
       const demoAnalysis = await apiClient.analyzeCase(demoCase.case_id, demoReq);
@@ -222,16 +238,71 @@ export default function InvestigatorDashboard() {
     }
   };
 
-  // ── 5. Create Custom Case ──────────────────────────────────────────────────
-  const handleCreateCase = async (newCase: FraudCase) => {
-    const created = await apiClient.createCase(newCase);
+  // ── 5. Real Data Upload Completed Handler ──────────────────────────────────
+  const handleInvestigationReady = async (
+    caseData: FraudCase,
+    ingestedEvents: TransactionEvent[],
+    analysisSeedTxId: string,
+    sinkAccounts: string[] = [],
+    configuredCutoff?: string
+  ) => {
+    setIsUploadWizardOpen(false);
+    setErrorMessage(null);
+
+    // Refresh stored cases
     await fetchCases();
-    setActiveCaseId(created.case_id);
+
+    setActiveCaseId(caseData.case_id);
+    setCurrentCase(caseData);
+    setEvents(ingestedEvents);
+    setActiveSeedTxId(analysisSeedTxId);
+    setActiveSinkAccounts(sinkAccounts);
+
+    const cutoff = configuredCutoff || ingestedEvents[ingestedEvents.length - 1]?.occurred_at || new Date().toISOString();
+    setDecisionTimestamp(cutoff);
+
+    // Automatically trigger end-to-end analysis on newly uploaded dataset
+    setIsAnalyzing(true);
+    const seedEvent = ingestedEvents.find((e) => e.transaction_id === analysisSeedTxId) || ingestedEvents[0];
+
+    const reqPayload: InvestigationAnalysisRequest = {
+      simulation_timestamp: cutoff,
+      taint_seeds: [
+        {
+          transaction_id: seedEvent.transaction_id,
+          tainted_amount_minor_units: seedEvent.amount_minor_units,
+        },
+      ],
+      source_account_ids: [seedEvent.receiver.account_id],
+      sink_account_ids: sinkAccounts.length > 0 ? sinkAccounts : undefined,
+      forecast_config: {
+        top_k: 3,
+        max_depth: 3,
+        hop_delay_seconds: 300,
+      },
+      constraints: {
+        minimum_required_illicit_recovery: 0,
+        maximum_interventions: 2,
+      },
+    };
+
+    try {
+      const result = await apiClient.analyzeCase(caseData.case_id, reqPayload);
+      setAnalysis(result);
+    } catch (err) {
+      setErrorMessage(
+        err instanceof ApiError
+          ? err.detail
+          : "Case successfully ingested, but initial analysis stage failed. You can adjust parameters and retry."
+      );
+    } finally {
+      setIsAnalyzing(false);
+    }
   };
 
   return (
-    <div className="min-h-screen bg-surface-base text-slate-100 flex flex-col font-sans selection:bg-brand-primary selection:text-white">
-      {/* ── Layer A: Compact Command Header ── */}
+    <div className="min-h-screen bg-background text-slate-100 flex flex-col font-sans selection:bg-brand-primary selection:text-white">
+      {/* ── Command Navigation Header ── */}
       <Navbar
         cases={cases}
         activeCaseId={activeCaseId}
@@ -240,12 +311,12 @@ export default function InvestigatorDashboard() {
           setAnalysis(null);
         }}
         onLoadDemo={handleLoadDemo}
-        onNewCase={() => setIsNewCaseModalOpen(true)}
+        onOpenUploadWizard={() => setIsUploadWizardOpen(true)}
         isLoadingDemo={isLoadingDemo}
         isBackendHealthy={isBackendHealthy}
       />
 
-      {/* ── Global Error Alert Banner ── */}
+      {/* ── Global Alert Banner ── */}
       {errorMessage && (
         <div className="bg-risk-danger/15 border-b border-risk-danger/30 px-4 py-2.5 text-xs text-rose-200 flex items-center justify-between">
           <div className="flex items-center gap-2">
@@ -263,236 +334,199 @@ export default function InvestigatorDashboard() {
 
       {/* ── Main Content Area ── */}
       <main className="flex-1 flex flex-col">
-        {/* Layer B: Investigation Summary Banner */}
-        <InvestigationHeader
-          currentCase={currentCase}
-          eventsCount={events.length}
-          decisionTimestamp={decisionTimestamp}
-          analysis={analysis}
-          isAnalyzing={isAnalyzing || isLoadingTimeline}
-          onRunAnalysis={executeAnalysis}
-          reportedAmountMinorUnits={events[0]?.amount_minor_units}
-        />
-
-        {/* Empty State when no case exists */}
+        {/* State A: Case Intake Screen (Step 4 Requirement: Upload First) */}
         {!currentCase && !isLoadingCases && (
-          <div className="flex-1 flex flex-col items-center justify-center p-6 lg:p-12 text-center max-w-2xl mx-auto space-y-6">
-            <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-surface-elevated border border-surface-border text-brand-periwinkle shadow-xl">
-              <Search className="h-7 w-7 text-brand-primary" />
-            </div>
-
-            <div className="space-y-3">
-              <h2 className="text-xl font-semibold tracking-tight text-white">
-                Investigate a reported payment
-              </h2>
-              <p className="text-sm text-slate-300 leading-relaxed max-w-lg mx-auto">
-                Follow its movement across accounts, review the supporting evidence, and compare possible intervention points to intercept funds before they exit the banking network.
-              </p>
-            </div>
-
-            {/* 3 Investigation Questions Guidance */}
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-3 w-full text-left pt-2">
-              <div className="p-3.5 rounded-xl bg-surface-elevated border border-surface-border space-y-1">
-                <span className="text-[11px] font-semibold text-brand-periwinkle uppercase tracking-wider block">
-                  1. What happened?
-                </span>
-                <p className="text-xs text-slate-300">
-                  Review the initial unauthorized transfer, reported fraud amount, and affected accounts.
-                </p>
-              </div>
-
-              <div className="p-3.5 rounded-xl bg-surface-elevated border border-surface-border space-y-1">
-                <span className="text-[11px] font-semibold text-brand-columbia uppercase tracking-wider block">
-                  2. Where did it move?
-                </span>
-                <p className="text-xs text-slate-300">
-                  Trace downstream transfers, multi-hop splits, and commingled funds on the timeline.
-                </p>
-              </div>
-
-              <div className="p-3.5 rounded-xl bg-surface-elevated border border-surface-border space-y-1">
-                <span className="text-[11px] font-semibold text-brand-celadon uppercase tracking-wider block">
-                  3. What intervention to review?
-                </span>
-                <p className="text-xs text-slate-300">
-                  Compare optimal hold options to maximize recovered funds while minimizing legitimate collateral.
-                </p>
-              </div>
-            </div>
-
-            <div className="pt-2">
-              <button
-                onClick={handleLoadDemo}
-                disabled={isLoadingDemo}
-                className="inline-flex items-center gap-2.5 rounded-lg bg-brand-primary px-5 py-3 text-sm font-medium text-white shadow-lg shadow-brand-primary/25 hover:bg-[#5252ee] transition-all cursor-pointer focus:outline-none focus:ring-2 focus:ring-brand-primary/50"
-              >
-                <Zap className="h-4 w-4" />
-                <span>{isLoadingDemo ? "Loading scenario..." : "Load demo investigation (Operation Nightshade)"}</span>
-                <ArrowRight className="h-4 w-4 text-brand-periwinkle" />
-              </button>
-            </div>
+          <div className="flex-1 flex items-center justify-center p-4">
+            <CaseIntakeWorkflow
+              onInvestigationReady={handleInvestigationReady}
+              onLoadSyntheticDemo={handleLoadDemo}
+              isLoadingDemo={isLoadingDemo}
+            />
           </div>
         )}
 
-        {/* Loaded Case Workspace */}
+        {/* State B: Active Investigation Workspace */}
         {currentCase && (
-          <div className="flex-1 p-4 lg:p-6 space-y-5 max-w-[1680px] w-full mx-auto">
-            {/* Layer C: Transaction Network Graph (Dominant Workspace Centerpiece) */}
-            <div className="w-full">
-              <TransactionGraph
-                events={events}
-                analysis={analysis}
-                decisionTimestamp={decisionTimestamp}
-                sinkAccounts={analysis?.chokepoint_report ? ["Exit-CryptoDesk-909"] : []}
-                seedTxIds={events[0] ? [events[0].transaction_id] : []}
-              />
-            </div>
+          <>
+            {/* Layer B: Executive Case Summary Banner */}
+            <InvestigationHeader
+              currentCase={currentCase}
+              eventsCount={events.length}
+              decisionTimestamp={decisionTimestamp}
+              analysis={analysis}
+              isAnalyzing={isAnalyzing || isLoadingTimeline}
+              onRunAnalysis={executeAnalysis}
+              reportedAmountMinorUnits={
+                events.find((e) => e.transaction_id === activeSeedTxId)?.amount_minor_units ||
+                events[0]?.amount_minor_units
+              }
+            />
 
-            {/* Layer D: Investigation Timeline Scrubber */}
-            <div className="w-full">
-              <TimelineControl
-                events={events}
-                decisionTimestamp={decisionTimestamp}
-                onSelectTimestamp={(ts) => {
-                  setDecisionTimestamp(ts);
-                }}
-                analysisTimestamp={analysis?.simulation_timestamp}
-              />
-            </div>
+            <div className="flex-1 p-4 lg:p-6 space-y-5 max-w-[1680px] w-full mx-auto">
+              {/* Layer C: Transaction Network Graph (Dominant Workspace Centerpiece) */}
+              <div className="w-full">
+                <TransactionGraph
+                  events={events}
+                  analysis={analysis}
+                  decisionTimestamp={decisionTimestamp}
+                  sinkAccounts={activeSinkAccounts}
+                  seedTxIds={activeSeedTxId ? [activeSeedTxId] : events[0] ? [events[0].transaction_id] : []}
+                />
+              </div>
 
-            {/* Investigation Workbench Tabs Navigation */}
-            <div className="border-b border-surface-border flex items-center gap-1 pt-2 overflow-x-auto">
-              <button
-                onClick={() => setActiveTab("overview")}
-                className={`flex items-center gap-2 px-4 py-2.5 text-xs font-medium border-b-2 transition-all cursor-pointer whitespace-nowrap ${
-                  activeTab === "overview"
-                    ? "border-brand-primary text-white bg-surface-elevated/80 font-semibold"
-                    : "border-transparent text-slate-400 hover:text-slate-200 hover:bg-surface-elevated/40"
-                }`}
-              >
-                <Target className={`h-3.5 w-3.5 ${activeTab === "overview" ? "text-brand-primary" : "text-slate-400"}`} />
-                <span>Recommended intervention</span>
-              </button>
+              {/* Layer D: Investigation Timeline Scrubber */}
+              <div className="w-full">
+                <TimelineControl
+                  events={events}
+                  decisionTimestamp={decisionTimestamp}
+                  onSelectTimestamp={(ts) => {
+                    setDecisionTimestamp(ts);
+                  }}
+                  analysisTimestamp={analysis?.simulation_timestamp}
+                />
+              </div>
 
-              <button
-                onClick={() => setActiveTab("comparison")}
-                className={`flex items-center gap-2 px-4 py-2.5 text-xs font-medium border-b-2 transition-all cursor-pointer whitespace-nowrap ${
-                  activeTab === "comparison"
-                    ? "border-brand-primary text-white bg-surface-elevated/80 font-semibold"
-                    : "border-transparent text-slate-400 hover:text-slate-200 hover:bg-surface-elevated/40"
-                }`}
-              >
-                <Scale className={`h-3.5 w-3.5 ${activeTab === "comparison" ? "text-brand-periwinkle" : "text-slate-400"}`} />
-                <span>Compare interventions ({analysis?.all_candidates?.length || 0})</span>
-              </button>
+              {/* Workbench Tabs Navigation */}
+              <div className="border-b border-surface-border flex items-center gap-1 pt-2 overflow-x-auto">
+                <button
+                  onClick={() => setActiveTab("overview")}
+                  className={`flex items-center gap-2 px-4 py-2.5 text-xs font-medium border-b-2 transition-all cursor-pointer whitespace-nowrap ${
+                    activeTab === "overview"
+                      ? "border-brand-primary text-white bg-surface-elevated/80 font-semibold"
+                      : "border-transparent text-slate-400 hover:text-slate-200 hover:bg-surface-elevated/40"
+                  }`}
+                >
+                  <Target className={`h-3.5 w-3.5 ${activeTab === "overview" ? "text-brand-primary" : "text-slate-400"}`} />
+                  <span>Recommended intervention</span>
+                </button>
 
-              <button
-                onClick={() => setActiveTab("provenance")}
-                className={`flex items-center gap-2 px-4 py-2.5 text-xs font-medium border-b-2 transition-all cursor-pointer whitespace-nowrap ${
-                  activeTab === "provenance"
-                    ? "border-brand-primary text-white bg-surface-elevated/80 font-semibold"
-                    : "border-transparent text-slate-400 hover:text-slate-200 hover:bg-surface-elevated/40"
-                }`}
-              >
-                <GitFork className={`h-3.5 w-3.5 ${activeTab === "provenance" ? "text-brand-columbia" : "text-slate-400"}`} />
-                <span>Money trail</span>
-              </button>
+                <button
+                  onClick={() => setActiveTab("comparison")}
+                  className={`flex items-center gap-2 px-4 py-2.5 text-xs font-medium border-b-2 transition-all cursor-pointer whitespace-nowrap ${
+                    activeTab === "comparison"
+                      ? "border-brand-primary text-white bg-surface-elevated/80 font-semibold"
+                      : "border-transparent text-slate-400 hover:text-slate-200 hover:bg-surface-elevated/40"
+                  }`}
+                >
+                  <Scale className={`h-3.5 w-3.5 ${activeTab === "comparison" ? "text-brand-periwinkle" : "text-slate-400"}`} />
+                  <span>Compare interventions ({analysis?.all_candidates?.length || 0})</span>
+                </button>
 
-              <button
-                onClick={() => setActiveTab("intelligence")}
-                className={`flex items-center gap-2 px-4 py-2.5 text-xs font-medium border-b-2 transition-all cursor-pointer whitespace-nowrap ${
-                  activeTab === "intelligence"
-                    ? "border-brand-primary text-white bg-surface-elevated/80 font-semibold"
-                    : "border-transparent text-slate-400 hover:text-slate-200 hover:bg-surface-elevated/40"
-                }`}
-              >
-                <Brain className={`h-3.5 w-3.5 ${activeTab === "intelligence" ? "text-brand-periwinkle" : "text-slate-400"}`} />
-                <span>Predictions and risk signals</span>
-              </button>
+                <button
+                  onClick={() => setActiveTab("provenance")}
+                  className={`flex items-center gap-2 px-4 py-2.5 text-xs font-medium border-b-2 transition-all cursor-pointer whitespace-nowrap ${
+                    activeTab === "provenance"
+                      ? "border-brand-primary text-white bg-surface-elevated/80 font-semibold"
+                      : "border-transparent text-slate-400 hover:text-slate-200 hover:bg-surface-elevated/40"
+                  }`}
+                >
+                  <GitFork className={`h-3.5 w-3.5 ${activeTab === "provenance" ? "text-sky-400" : "text-slate-400"}`} />
+                  <span>Money trail & taint propagation</span>
+                </button>
 
-              <button
-                onClick={() => setActiveTab("evidence")}
-                className={`flex items-center gap-2 px-4 py-2.5 text-xs font-medium border-b-2 transition-all cursor-pointer whitespace-nowrap ${
-                  activeTab === "evidence"
-                    ? "border-brand-primary text-white bg-surface-elevated/80 font-semibold"
-                    : "border-transparent text-slate-400 hover:text-slate-200 hover:bg-surface-elevated/40"
-                }`}
-              >
-                <FileText className={`h-3.5 w-3.5 ${activeTab === "evidence" ? "text-slate-300" : "text-slate-400"}`} />
-                <span>Evidence and limitations</span>
-              </button>
-            </div>
+                <button
+                  onClick={() => setActiveTab("intelligence")}
+                  className={`flex items-center gap-2 px-4 py-2.5 text-xs font-medium border-b-2 transition-all cursor-pointer whitespace-nowrap ${
+                    activeTab === "intelligence"
+                      ? "border-brand-primary text-white bg-surface-elevated/80 font-semibold"
+                      : "border-transparent text-slate-400 hover:text-slate-200 hover:bg-surface-elevated/40"
+                  }`}
+                >
+                  <Brain className={`h-3.5 w-3.5 ${activeTab === "intelligence" ? "text-brand-periwinkle" : "text-slate-400"}`} />
+                  <span>Predictions and risk signals</span>
+                </button>
 
-            {/* Workbench Tab Panes */}
-            <div className="pt-1">
-              {activeTab === "overview" && (
-                <div className="space-y-4">
-                  {/* Hero: Selected Pareto Recommendation Card */}
-                  <RecommendationCard
-                    recommendation={analysis?.selected_recommendation || null}
-                    decisionTimestamp={decisionTimestamp}
+                <button
+                  onClick={() => setActiveTab("evidence")}
+                  className={`flex items-center gap-2 px-4 py-2.5 text-xs font-medium border-b-2 transition-all cursor-pointer whitespace-nowrap ${
+                    activeTab === "evidence"
+                      ? "border-brand-primary text-white bg-surface-elevated/80 font-semibold"
+                      : "border-transparent text-slate-400 hover:text-slate-200 hover:bg-surface-elevated/40"
+                  }`}
+                >
+                  <FileText className={`h-3.5 w-3.5 ${activeTab === "evidence" ? "text-slate-300" : "text-slate-400"}`} />
+                  <span>Evidence and methodology</span>
+                </button>
+              </div>
+
+              {/* Workbench Tab Panes */}
+              <div className="pt-1">
+                {activeTab === "overview" && (
+                  <div className="space-y-4">
+                    <RecommendationCard
+                      recommendation={analysis?.selected_recommendation || null}
+                      decisionTimestamp={decisionTimestamp}
+                    />
+
+                    <ChokepointPanel
+                      chokepointReport={analysis?.chokepoint_report || null}
+                      selectedRecommendation={analysis?.selected_recommendation || null}
+                      sourceAccounts={events[0] ? [events[0].receiver.account_id] : []}
+                      sinkAccounts={activeSinkAccounts}
+                    />
+                  </div>
+                )}
+
+                {activeTab === "comparison" && (
+                  <InterventionComparison
+                    candidates={analysis?.all_candidates || []}
+                    competingReasons={analysis?.competing_candidates || []}
+                    selectedInterventionId={
+                      analysis?.selected_recommendation?.intervention_id
+                    }
+                    summary={analysis?.evaluated_candidates}
                   />
+                )}
 
-                  {/* Chokepoint & Min-Cut Barrier Panel */}
-                  <ChokepointPanel
-                    chokepointReport={analysis?.chokepoint_report || null}
-                    selectedRecommendation={analysis?.selected_recommendation || null}
-                    sourceAccounts={events[0] ? [events[0].receiver.account_id] : []}
-                    sinkAccounts={["Exit-CryptoDesk-909"]}
+                {activeTab === "provenance" && (
+                  <ProvenancePanel
+                    taintSummary={analysis?.taint_summary || null}
+                    selectedRecommendationIntercepted={
+                      analysis?.selected_recommendation?.modeled_tainted_capital_intercepted
+                    }
                   />
-                </div>
-              )}
+                )}
 
-              {activeTab === "comparison" && (
-                <InterventionComparison
-                  candidates={analysis?.all_candidates || []}
-                  competingReasons={analysis?.competing_candidates || []}
-                  selectedInterventionId={
-                    analysis?.selected_recommendation?.intervention_id
-                  }
-                  summary={analysis?.evaluated_candidates}
-                />
-              )}
+                {activeTab === "intelligence" && (
+                  <IntelligencePanel
+                    riskPredictions={analysis?.risk_predictions || []}
+                    nextHopPredictions={analysis?.next_hop_predictions || []}
+                    forecastReport={analysis?.forecast_report || null}
+                    riskStage={analysis?.stages?.risk_assessment}
+                    nextHopStage={analysis?.stages?.next_hop_prediction}
+                    forecastStage={analysis?.stages?.forecast_simulation}
+                  />
+                )}
 
-              {activeTab === "provenance" && (
-                <ProvenancePanel
-                  taintSummary={analysis?.taint_summary || null}
-                  selectedRecommendationIntercepted={
-                    analysis?.selected_recommendation?.modeled_tainted_capital_intercepted
-                  }
-                />
-              )}
-
-              {activeTab === "intelligence" && (
-                <IntelligencePanel
-                  riskPredictions={analysis?.risk_predictions || []}
-                  nextHopPredictions={analysis?.next_hop_predictions || []}
-                  forecastReport={analysis?.forecast_report || null}
-                  riskStage={analysis?.stages?.risk_assessment}
-                  nextHopStage={analysis?.stages?.next_hop_prediction}
-                  forecastStage={analysis?.stages?.forecast_simulation}
-                />
-              )}
-
-              {activeTab === "evidence" && (
-                <EvidenceWarningsPanel
-                  warnings={analysis?.warnings_and_limitations || []}
-                  stages={analysis?.stages}
-                  analysisTimestamp={analysis?.analysis_timestamp}
-                  overallStatus={analysis?.overall_status}
-                />
-              )}
+                {activeTab === "evidence" && (
+                  <EvidenceWarningsPanel
+                    warnings={analysis?.warnings_and_limitations || []}
+                    stages={analysis?.stages}
+                    analysisTimestamp={analysis?.analysis_timestamp}
+                    overallStatus={analysis?.overall_status}
+                  />
+                )}
+              </div>
             </div>
-          </div>
+          </>
         )}
       </main>
 
-      {/* ── New Case Modal ── */}
-      <NewCaseModal
-        isOpen={isNewCaseModalOpen}
-        onClose={() => setIsNewCaseModalOpen(false)}
-        onCreateCase={handleCreateCase}
-      />
+      {/* ── Case Intake Modal (Callable anytime via Upload CTA) ── */}
+      {isUploadWizardOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/85 backdrop-blur-md p-4">
+          <CaseIntakeWorkflow
+            isModal={true}
+            onCloseModal={() => setIsUploadWizardOpen(false)}
+            onInvestigationReady={handleInvestigationReady}
+            onLoadSyntheticDemo={async () => {
+              setIsUploadWizardOpen(false);
+              await handleLoadDemo();
+            }}
+            isLoadingDemo={isLoadingDemo}
+          />
+        </div>
+      )}
     </div>
   );
 }

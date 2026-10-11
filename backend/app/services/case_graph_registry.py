@@ -47,3 +47,8 @@ class CaseGraphRegistry:
     def graph(self, case_id: str) -> TemporalGraph | None:
         """Return the actual temporal graph for *case_id*, if it exists."""
         return self.get(case_id)
+
+    def remove(self, case_id: str) -> None:
+        """Remove the graph and event tracking for *case_id*."""
+        self._graphs.pop(case_id, None)
+        self._event_ids.pop(case_id, None)

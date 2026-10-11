@@ -13,6 +13,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from backend.app.api.analysis import router as analysis_router
 from backend.app.api.cases import router as cases_router
 from backend.app.api.events import router as events_router
+from backend.app.api.upload import router as upload_router
 
 app = FastAPI(
     title="AEGIS-Flow",
@@ -45,6 +46,7 @@ app.add_middleware(
 app.include_router(cases_router)
 app.include_router(events_router)
 app.include_router(analysis_router)
+app.include_router(upload_router)
 
 
 # ── Health ───────────────────────────────────────────────────────────────────

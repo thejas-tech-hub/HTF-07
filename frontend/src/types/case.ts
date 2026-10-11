@@ -1,14 +1,19 @@
 export type CaseOrigin =
   | "customer_report"
   | "bank_detection"
+  | "shared_intelligence"
+  | "manual_investigation"
   | "intelligence_feed"
   | "law_enforcement"
   | "synthetic";
 
 export type CaseStatus =
   | "open"
+  | "under_review"
   | "under_investigation"
   | "escalated"
+  | "resolved"
+  | "closed"
   | "closed_recovered"
   | "closed_unrecovered";
 
